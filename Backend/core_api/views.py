@@ -7,7 +7,8 @@ import os
 from rest_framework.views import APIView
 from rest_framework.response import Response
 import google.generativeai as genai
-
+from .tasks import generate_content_task
+from celery.result import AsyncResult
 
 class MessageViewSet(viewsets.ModelViewSet):
     queryset = Message.objects.all().order_by('-created_at')
@@ -25,25 +26,26 @@ class ContentGenerationView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        try:
-            # Configure the Gemini client with your API key
-            genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        # Call the Celery task asynchronously
+        # We'll use apply_async for more control in a later step
+        task = generate_content_task.delay(prompt)
 
-            # Create the GenerativeModel instance
-            model = genai.GenerativeModel('gemini-1.5-flash')
+        return Response(
+            {"task_id": task.id, "message": "Content generation task has been queued."},
+            status=status.HTTP_202_ACCEPTED
+        )
 
-            # Generate content
-            response = model.generate_content(prompt)
-            generated_content = response.text
+class TaskStatusView(APIView):
+    permission_classes = [AllowAny]
 
-            return Response(
-                {"generated_content": generated_content},
-                status=status.HTTP_200_OK
-            )
+    def get(self, request, task_id, *args, **kwargs):
+        task = AsyncResult(task_id)
 
-        except Exception as e:
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        response_data = {
+            "task_id": task.id,
+            "status": task.status,
+            "result": task.result if task.ready() else None
+        }
+
+        return Response(response_data, status=status.HTTP_200_OK)
    

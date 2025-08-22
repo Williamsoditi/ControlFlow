@@ -1,6 +1,5 @@
 
-import React, { useState } from 'react';
-import axios from 'axios';
+import React, { useState, useRef } from 'react';
 import {
   Button,
   Container,
@@ -28,22 +27,54 @@ export function AIGenerator() {
   const [generatedContent, setGeneratedContent] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const socketRef = useRef<WebSocket | null>(null);
 
-  const handleSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setLoading(true);
-    setError(null);
-    setGeneratedContent('');
-
-    try {
-      const response = await axios.post('http://localhost:8000/api/generate-content/', { prompt });
-      setGeneratedContent(response.data.generated_content);
-    } catch (err) {
-      console.error(err);
-      setError('Failed to generate content. Please try again.');
-    } finally {
-      setLoading(false);
+  const handleStop = () => {
+    if (socketRef.current) {
+      socketRef.current.close();
     }
+    setLoading(false);
+  };
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    setGeneratedContent('');
+    setError(null);
+    setLoading(true);
+    
+    // Open a new WebSocket connection
+    const socket = new WebSocket('ws://localhost:8000/ws/generate-content/');
+    socketRef.current = socket;
+
+    socket.onopen = () => {
+      console.log('WebSocket connected');
+      socket.send(JSON.stringify({ prompt }));
+    };
+
+    socket.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      
+      if (data.status === 'streaming') {
+        setGeneratedContent(prevContent => prevContent + data.content);
+      } else if (data.status === 'complete') {
+        setLoading(false);
+        socket.close();
+      } else if (data.status === 'error') {
+        setError(data.message);
+        setLoading(false);
+        socket.close();
+      }
+    };
+
+    socket.onclose = () => {
+      console.log('WebSocket disconnected');
+    };
+
+    socket.onerror = (err) => {
+      console.error('WebSocket error:', err);
+      setError('WebSocket connection failed.');
+      setLoading(false);
+    };
   };
 
   return (
@@ -62,15 +93,25 @@ export function AIGenerator() {
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
         />
-        <Button
-          type="submit"
-          variant="contained"
-          color="primary"
-          disabled={loading || prompt.trim() === ''}
-          sx={{ mt: 2 }}
-        >
-          {loading ? <CircularProgress size={24} color="inherit" /> : 'Generate Content'}
-        </Button>
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          <Button
+            type="submit"
+            variant="contained"
+            color="primary"
+            disabled={loading || prompt.trim() === ''}
+          >
+            {loading ? <CircularProgress size={24} color="inherit" /> : 'Generate Content'}
+          </Button>
+          {loading && (
+            <Button
+              variant="outlined"
+              color="secondary"
+              onClick={handleStop}
+            >
+              Stop
+            </Button>
+          )}
+        </Box>
       </form>
 
       {generatedContent && (
@@ -91,7 +132,6 @@ export function AIGenerator() {
           {error}
         </Typography>
       )}
-
     </StyledContainer>
   );
 }
